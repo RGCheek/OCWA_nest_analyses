@@ -1,0 +1,17 @@
+These data include nest survey data from 200 Orange-crowned Warbler nesting attempts from 2004 to 2007 as well as the physical nests
+that were collected and stored until dissection of nests could take place in 2018. Of these collected nests, 103 nests from Santa Catalina Island (California, USA) were dissected and 33 nests that were 
+built on the ground (nest height = 0 meters), and 33 of the highest "off-ground" nests were weighed and their constituent parts; twigs, grasses, and "other" 
+materials, were weighed separately to quantify nest composition. All weights are in unit grams, and nest heights were measured in meters as part of nest survey field data. 
+
+Further, nests were selected if they were built by the same female withing a breeding season so that analyses regarding behavioral plasticity could be conducted.
+
+Github repository includes the nesting data used in analyses and an R markdown file of the annotated code.  
+
+For more information on the study system, See:
+Sofaer HR, Sillett TS, Langin KM, Morrison SA,  Cameron K. Ghalambor. Partitioning the sources of demographic variation reveals density-dependent nest predation in an island bird population. Ecology and Evolution. 2014; 4(13): 2738–2748. doi: 10.1002/ece3.1127 
+
+Montag H, Nager R, Ghalambor CK, Sillett TS. Nest Site Selection of the Endemic" Dusky" Orange-crowned Warbler (Vermivora celata sordida) on Santa Catalina Island. In Proceedings of the 7th California Islands Symposium. 2009. Institute for Wildlife Studies.
+
+Peluc S, Sillett T, Rotenberry J, Ghalambor C. Adaptive phenotypic plasticity in an island songbird exposed to a novel predation risk. Behav Ecol. 2008;19(4):830-5. 
+
+Please contact RGCheek through DM or at rgcheek@rams.colostate.edu if you have any questions. 
