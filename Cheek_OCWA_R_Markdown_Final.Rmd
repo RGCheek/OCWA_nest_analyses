@@ -1,0 +1,1305 @@
+---
+title: "OCWA_R_Analysis"
+author: "Rebecca Cheek & Sarah Hays"
+date: "Nov 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#load libraries
+library(gridExtra)
+library(grid)
+library(boot)
+library(car)
+library(lattice)
+library(emmeans)
+library(MuMIn)
+library(multcomp)
+library(gplots)
+library(Amelia)
+library(mlbench)
+library(lme4)
+library(popbio)
+library(lmerTest)
+library(ggthemes)
+library(MASS)
+library(extrafont)
+library(stringr)
+library(betareg)
+library(nlme)
+library(tidyverse)
+library(rvest)
+library(plotrix)
+library(lmtest)
+library(factoextra)
+library(ggfortify)
+library(glmmTMB)
+library(lubridate)
+library(rms)
+library(ggeffects)
+library(cowplot)
+
+```
+
+#Individual plasticity of nest building behavior informs behavioral evolution in an insular population of songbirds 
+
+##The R code
+
+###Hays, Cheek, & Ghalambor (2019)
+
+These data include nest survey data from 200 Orange-crowned Warbler nesting attempts from 2004 to 2007 as well as the physical nests that were collected and stored until dissection of nests could take place in 2018. Of these collected nests, 103 were dissected and 33 nests that were built on the ground (nest height = 0 meters), and 33 of the highest "off-ground" nests were weighed and their constituent parts; twigs, grasses, and "other" materials, were weighed separately to quantify nest composition. All weights are in unit grams, and nest heights were measured in meters as part of nest survey field data. 
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#import fancy fonts (this takes a few min, but only need to do it once then you can comment it out)
+#font_import()
+#loadfonts(device = "win")
+
+# load data file 
+#Rebecca's final data directory 
+bignest <- read.csv("C:/Users/Rebecca/Dropbox/OCWA Files/ocwa/for_github/Nest_Data_Final.csv") 
+
+
+#look at the data strucutre
+str(bignest)
+head(bignest)
+
+#option to filter out the SCI and CPC nests
+bignest <- bignest %>% 
+  dplyr::filter(!plot =="SCI") %>% 
+              dplyr::filter(!plot =="CPC")
+
+
+#add on ground off ground category
+bignest$ground_category[bignest$nest_height_m == 0 ] <-  "on-ground" 
+bignest$ground_category[bignest$nest_height_m > 0] <- "off-ground"
+
+
+###mark empty collums as NA
+
+## define a helper function
+empty_as_na <- function(x){
+    if("factor" %in% class(x)) x <- as.character(x) ## since ifelse wont work with factors
+    ifelse(as.character(x)!="", x, NA)
+}
+
+## transform all columns
+bignest <- bignest %>% 
+  mutate_each(funs(empty_as_na)) 
+
+#filter to just nests that were dissected by filtering out missing values in grasses weight
+bignest <- bignest %>% 
+  drop_na(grasses_weight) 
+  
+
+
+#make a new collumn that specifies year. Nest id is year-nest number so can covert it to year
+bignest$nest_id <- as.character(bignest$nest_id)
+bignest$year <-  substr(bignest$nest_id,1,nchar(bignest$nest_id)-4)
+bignest$year <- as.numeric(bignest$year) 
+bignest$year <-  bignest$year+ 2000
+bignest$year <- as.factor(bignest$year) 
+
+
+#calculate the percent of each constintuent material, twigs, grass, other, bark and leaves   
+bignest$percent_twigs <- (bignest$twigs_weight/bignest$nest_weight)
+bignest$percent_grasses<- (bignest$grasses_weight/bignest$nest_weight)
+bignest$percent_other <- (bignest$other_weight/bignest$nest_weight)
+bignest$percent_bark_and_leaves<- (bignest$bark_leaves_weight/bignest$nest_weight)
+
+#Set zeros in the data are 0.00001 so the beta regressions will run.  
+bignest$percent_twigs[bignest$percent_twigs == 0] <- 0.000001
+bignest$percent_grasses[bignest$percent_grasses == 0] <- 0.000001
+bignest$percent_other[bignest$percent_other == 0] <- 0.000001
+bignest$percent_bark_and_leaves[bignest$percent_bark_and_leaves == 0] <- 0.000001
+
+#Unbanded females can be acounted for by territorry/grid since OCWAs exhibit site fidelity
+bignest$grid <-as.character(bignest$grid)
+bignest$female_id[is.na(bignest$female_id)] <- as.character(bignest$grid[is.na(bignest$female_id)])
+bignest$female_id <- factor(bignest$female_id)
+bignest$nest_height_m <- as.numeric(bignest$nest_height_m)
+
+#sort by female id
+attach(bignest)
+bignest <- bignest[order(female_id),]
+detach(bignest)
+
+#subset the data for the 35 nests that were the highest off-ground nests in the dataset
+ground_high <- bignest %>% 
+  filter(ground_category =="off-ground") %>% 
+    slice_max(n=33, order_by=nest_height_m, with_ties=F)
+
+#subset data for the on-ground nests 
+ground_low <- bignest %>% 
+  filter(ground_category=="on-ground")
+
+#new subsetted dataframe 
+ground <- rbind(ground_high, ground_low)
+
+
+#Force R to read in on-ground as the reference by reordering the on vs. off ground factors
+ground$ground_category <-as.factor(ground$ground_category) 
+#Read in as the reference (when you ask for levels(ground$ground_category), on-ground should be printed out first [1] "on-ground"  "off-ground", compared to [1] "off-ground" "on-ground" )
+
+ground$ground_category <- factor(ground$ground_category , levels(ground$ground_category )[c(2,1)]) 
+
+
+
+```
+
+
+*Research Question 1: Does OCWA nest composition change for on-ground vs. off-ground nests?* 
+
+According to (Montage et al. 2009), a change in nest site location corresponds anecdotally to a change in nest structure but has yet to be characterized quantitatively. Our goal here is to show hoe nest structure characteristics varies off-ground compared to on-ground nests. This will also provide evidence towards the prediction Hansell 2000 proposed where off ground nests need to have more twigs for the sake of structural support in open cup nesting birds.   
+
+We will use an alpha value of 0.05 throughout our analyses. 
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+#Visualise nest structure components by ground category 
+#calculate Percent Twigs by On/Off Ground
+box_twigs <- ggplot(ground, aes(x = ground_category, y = percent_twigs)) +
+   geom_text(x= c(2), y = .55, label = "**")+
+  geom_boxplot(fill= c("white", "grey38"),
+               notch = TRUE) +
+  scale_y_continuous(name = "Twigs Proportion",
+                     breaks = seq(0,.6,.05),
+                     limits=c(0, .6)) +
+  scale_x_discrete(name = "Ground Category") +
+  ggtitle("C) Twigs Proportion") +
+  theme_few() +
+   theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text=element_text(family="Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 11),
+        axis.text.y=element_text(colour="black", size = 9),
+        axis.line = element_line(size=0.5, colour = "black"))
+
+
+#Boxplot Percent Grasses by On/Off ground
+box_grass <- ggplot(ground, aes(x = ground_category, y = percent_grasses)) +
+   geom_text(x= c(2), y = .59, label = "*")+
+  geom_boxplot(fill= c("white", "grey38"),
+               notch = TRUE) +
+  scale_y_continuous(name = "Grasses Proportion",
+                     breaks = seq(0,.6,.05),
+                     limits=c(0, .6)) +
+  scale_x_discrete(name = "Ground Category") +
+  ggtitle("B) Grasses Proportion") +
+  theme_few() +
+    theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text=element_text(family="Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 11),
+        axis.text.y=element_text(colour="black", size = 9),
+        axis.line = element_line(size=0.5, colour = "black"))
+
+
+#Boxplot Mass by On/Off Ground
+box_mass <- ggplot(ground, aes(x = ground_category, y = nest_weight)) +
+  geom_text(x= c(2), y = 56, label = "***")+
+  geom_boxplot(fill= c("white", "grey38"),
+               notch = TRUE) +
+  scale_y_continuous(name = "Nest Weight (g)",
+                     breaks = seq(0,53,15),
+                     limits=c(0, 56)) +
+  scale_x_discrete(name = "Ground Category") +
+  ggtitle("A) Nest Mass") +
+  theme_few() +
+    theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text=element_text(family="Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 11),
+        axis.text.y=element_text(colour="black", size = 9),
+        axis.line = element_line(size=0.5, colour = "black")) 
+
+
+
+box_bark <- ggplot(ground, aes(x = ground_category, y = percent_bark_and_leaves)) +
+  geom_boxplot(fill= c("white", "grey38"),
+               notch = TRUE) +
+  scale_y_continuous(name = "Bark & Leaves Proportion",
+                     breaks = seq(0,.6,.05),
+                     limits=c(0, .6)) +
+  scale_x_discrete(name = "Ground Category") +
+  ggtitle("D) Bark & Leaves Proportion") +
+  theme_few() +
+  theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text=element_text(family="Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 11),
+        axis.text.y=element_text(colour="black", size = 9),
+        axis.line = element_line(size=0.5, colour = "black"))
+
+
+#print all the boxplots side by side 
+grid.arrange(box_mass, box_grass, box_twigs, box_bark, ncol=2)
+
+
+
+```
+
+
+We can see some variation in nest structure components. We further analyse these results below so we can incorporate p-values in the visual. 
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+###############################
+#summarise data with plot means 
+###############################
+
+par(mar=c(5,5,5,5))
+plotmeans(percent_twigs ~ ground_category, data = ground, frame = TRUE, level=0.95,
+          xlab = " ", ylab = "Percentage of Twigs",
+          main="Percent Twigs vs Ground Category Mean Plot with 95% CI") 
+
+#Mean Plot for Grasses vs. Ground Category
+par(mar=c(5,5,5,5))
+plotmeans(percent_grasses ~ ground_category, data = ground, frame = TRUE, level=0.95,
+          xlab = " ", ylab = "Percentage of Grasses",
+          main="Mean Plot for Percent Grasses vs
+          Ground Category with 95% CI") 
+
+#Mean Plot for Nest Mass vs. Ground Category
+par(mar=c(5,5,5,5))
+plotmeans(nest_weight ~ ground_category, data = ground, frame = TRUE, level=0.95,
+          xlab = " ", ylab = "Mass of Nest (g)",
+          main="Mean Plot for Nest Mass vs
+          Ground Category with 95% CI") 
+
+
+#mean plot for bark and leaves Vs. Ground category
+par(mar=c(5,5,5,5))
+plotmeans(percent_bark_and_leaves ~ ground_category, data = ground, frame = TRUE, level=0.95,
+          xlab = " ", ylab = "Percent Bark and Leaves",
+          main="Mean Plot for Percent Bark and Leaves vs
+          Ground Category with 95% CI") 
+
+```
+
+Quick look at the distributions of the data. and descriptive statistics 
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+ptwigs <- ggplot(data = ground, aes(x = percent_twigs)) + geom_histogram()
+ptwigs + facet_wrap(~ground_category)
+
+
+pgrass <- ggplot(data = ground, aes(x = percent_grasses)) + geom_histogram()
+pgrass + facet_wrap(~ground_category)
+
+pmass <- ggplot(data = ground, aes(x = nest_weight)) + geom_histogram()
+pmass + facet_wrap(~ground_category)
+
+pbark <- ggplot(data = ground, aes(x = percent_bark_and_leaves)) + geom_histogram()
+pbark + facet_wrap(~ground_category)
+
+
+#nest height
+ground %>%
+  group_by(ground_category) %>%
+  summarise(nest_height_meters = mean(nest_height_m)) 
+ground %>%
+  group_by(ground_category) %>%
+  summarise(nest_height_meters = sd(nest_height_m))
+
+ground %>%
+  group_by(ground_category) %>%
+summarise(nest_height_meters = std.error(nest_height_m))
+
+
+#nest mass
+ground %>%
+  group_by(ground_category) %>%
+  summarise(nest_weight = mean(nest_weight)) 
+ground %>%
+  group_by(ground_category) %>%
+  summarise(nest_weight = sd(nest_weight))
+ground %>%
+  group_by(ground_category) %>%
+summarise(nest_weight = std.error(nest_weight))
+
+
+
+#percent twigs
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_twigs = mean(percent_twigs)) 
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_twigs = sd(percent_twigs))
+ground %>%
+  group_by(ground_category) %>%
+summarise(percent_twigs = std.error(percent_twigs))
+
+
+#percent grass
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_grasses = mean(percent_grasses)) 
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_grasses= sd(percent_grasses))
+ground %>%
+  group_by(ground_category) %>%
+summarise(percent_grasses = std.error(percent_grasses))
+
+
+
+#percent bark and leaves
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_bark_and_leaves = mean(percent_bark_and_leaves)) 
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_bark_and_leaves = sd(percent_bark_and_leaves))
+ground %>%
+  group_by(ground_category) %>%
+summarise(percent_bark_and_leaves = std.error(percent_bark_and_leaves))
+
+#percent "other"
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_bark_and_leaves = mean(percent_other)) 
+ground %>%
+  group_by(ground_category) %>%
+  summarise(percent_other = sd(percent_other))
+
+ground %>%
+  group_by(ground_category) %>%
+summarise(percent_other = std.error(percent_other))
+
+```
+
+Variance tests
+```{r message=FALSE, warning=FALSE, include=FALSE}
+var.test(percent_twigs~ ground_category, ground, 
+         alternative = "two.sided")
+#Highly significant(p-value = 1.733e-05). Twigs have unequal variance though tansforming the proportion deosn't seem justified  
+
+var.test(percent_grasses~ ground_category, ground, 
+         alternative = "two.sided")
+#not significant (P-value=0.07423). Grasses have moderately equal varainces 
+
+var.test(nest_weight~ ground_category, ground, 
+         alternative = "two.sided")
+#p-value = 0.0009962. Nest mass has unequal variance. 
+
+var.test(log(nest_weight)~ ground_category, ground, 
+         alternative = "two.sided")
+#(p-value 0.8551) with log transformation, and it looks like it works in terms of balancing mass 
+
+
+var.test(percent_bark_and_leaves~ ground_category, ground, 
+         alternative = "two.sided")
+# significant(p-value = 0.004526). bark and leaves have unequal varainces
+```
+
+
+quick look at the data using T-tests 
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+###################################################
+##2 sample t-tests and variances for ground catgory
+####################################################
+
+#Independent 2-group t-test
+#Weight by ground
+t.test(nest_weight~ground_category, data=ground)
+
+
+#Twigs.p by ground
+t.test(percent_twigs~ground_category, data=ground)
+
+
+#Grasses.p by ground
+t.test(percent_grasses~ground_category, data=ground)
+
+
+#other.p by ground
+t.test(percent_other~ground_category, data=ground)
+
+
+```
+
+Because we have repeated measures we need to apply a mixed model. Broadly we'll want to structure the model as: glmer(response ~ predictor1 + (1|random effects)). Because our data has two non-numerical groups (on-ground, vs off-ground) we will apply a beta regression for the proportional data, but use a logit link function to force the model to act as a binomial generalized model. 
+
+Mass has significant unequal variance, so we will log transform the mass in the model to mitigate the effects. Twigs also had an unequal variance but the beta regression will mitigate this. 
+
+First off. Because we have nests spread across different years lets see if "year" has an effect. 
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#test to see if year is significantly different
+massyear <- glmer(log(nest_weight) ~ year  + ground_category + (1 |female_id), data = ground) 
+Anova(massyear, type=3)
+summary(massyear)
+confint(massyear, level =0.95)
+#emmeans(massyear, pairwise ~ year) #not significant
+#AIC(massyear) # 106.5905
+
+
+twigyear <- glmer(percent_twigs ~ year  + ground_category + (1 |female_id), data = ground) 
+Anova(twigyear, type=3)
+summary(twigyear) 
+confint(twigyear, level =0.95) #CI intersect 0 for year
+
+#year does not have a significant effect on the twig proportion
+
+
+grassyear <- glmer(percent_grasses ~ year  + ground_category + (1 |female_id), data = ground) 
+Anova(grassyear, type=3)
+summary(grassyear) #P=0.2938 for year
+confint(grassyear, level =0.95)
+
+
+barkyear <- glmer(percent_bark_and_leaves ~ year  + ground_category + (1 |female_id), data = ground) 
+Anova(barkyear, type=3)
+summary(barkyear) #P=0.7601 for year, and 0.3793
+confint(barkyear, level =0.95)
+
+otheryear <- glmer(percent_other ~ year  + ground_category + (1 |female_id), data = ground) 
+Anova(otheryear, type=3)
+summary(otheryear) #P=0.0619 for year, and 0.283
+confint(otheryear, level =0.95)
+
+#quick check to see if year is retained in full models
+options(na.action = "na.fail")
+da <- dredge(massyear, rank="AICc")
+subset(da, delta < 4) #not retained in top model
+
+db <- dredge(grassyear, rank="AICc") #not retained in top two models
+subset(db, delta < 4)
+
+dc <- dredge(twigyear, rank="AICc") #not retained
+subset(dc, delta < 4)
+
+dd <- dredge(barkyear, rank="AICc") #not retained in top model but retained in second. Ground category not indcluded
+subset(dd, delta < 4)
+
+de <- dredge(massyear, rank="AICc") #not retained 
+subset(de, delta < 4)
+
+
+```
+
+Year does not have an effect, though ground category seems like the best predictor. 
+
+Now we can look at our full models. 
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+##############################################
+#Generalized mixed models
+####################################################
+
+
+#log transformating the mass due to the unequal variance. Has a lower AIC than an untransformed model
+masslmer <- glmer(log(nest_weight) ~ ground_category + (1 |female_id), data = ground) 
+Anova(masslmer, type=3)
+summary(masslmer)
+confint(masslmer, level =0.95)
+#ground_categoryoff-ground 0.2361364 0.7220972
+
+#emmeans(masslmer, pairwise ~ ground_category)
+#AIC(masslmer) # 105.2391 transformed model, untransformed model is 584.8161
+
+
+#Model for twigs 
+twiglmer <- glmmTMB(percent_twigs ~ ground_category  + (1 | female_id), 
+    data = ground,
+      family= beta_family(link="logit"))
+Anova(twiglmer,type=3) #P-value=0.002337
+summary(twiglmer)
+confint(twiglmer, level=0.95)
+#emmeans(twiglmer, pairwise ~ ground_category) # to get within group comparisons
+#AIC(twiglmer) #-147.7062
+
+grasslmer <- glmmTMB(percent_grasses ~ ground_category + (1 | female_id), 
+    data = ground,
+      family= beta_family(link="logit"))
+Anova(grasslmer, type=2) #P-value 0.04934
+summary(grasslmer)
+confint(grasslmer, level=0.95)
+#emmeans(grasslmer, pairwise ~ ground_category)
+#AIC(grasslmer) #-20.12714
+
+#Bark and Leaves model
+barklmer <- glmmTMB(percent_bark_and_leaves ~ ground_category + (1 | female_id), 
+    data = ground,
+      family= beta_family(link="logit"))
+Anova(barklmer, type=3)
+summary(barklmer)
+confint(barklmer, level=0.95)
+#emmeans(barklmer,pairwise ~ ground_category)
+#AIC(barklmer) #-58.34707
+
+#other materials including seed pods, lichen, animal hair
+otherlmer <- glmmTMB(percent_other ~ ground_category + (1 | female_id), 
+    data = ground,
+      family= beta_family(link="logit"))
+Anova(otherlmer, type=3)
+summary(otherlmer)
+confint(otherlmer, level=0.95)
+#emmeans(otherlmer , ~ ground_category, type= "response")
+ #AIC(otherlmer) #-135.395
+
+
+# how correlated are twigs and total mass?
+#cor.test(ground$nest_weight, ground$twigs_weight, method = "pearson") #.826, so either total nest mass or twigs mass could be used as a proxy variable? 
+
+#cor.test(ground$nest_weight, ground$percent_twigs, method = "pearson")
+#is only .5823 so could use the percent of twigs and nest mass as two different explanitory variables, but close enought that just using one or the other should suffice
+
+
+
+
+```
+In general, off ground nests are heavier, have less grass, and more twigs, without an significant difference in bark and leaves, but a notable trend for "other materials". 
+
+Because the proportional data may be causing unknown issues we will try a strict beta regression to see if the results differ with the mixed models. However, we have to remove the duplicated female ID's since the model can't handle random effects. 
+```{r message=FALSE, warning=FALSE, include=FALSE}
+ground_non_dup <- ground[!duplicated(ground$female_id),] #this limits our sample size to 27 off ground nests and 13 on ground nests
+
+grass_beta <- betareg(percent_grasses~ ground_category, data=ground_non_dup) 
+
+joint_tests(grass_beta)
+lmtest::lrtest(grass_beta)
+summary(grass_beta)
+confint(grass_beta)
+
+#AIC(grass_beta) #-7.810826
+#P.value= 0.0042 
+
+twigs_beta <- betareg(percent_twigs~ ground_category, data=ground_non_dup) 
+
+joint_tests(twigs_beta)
+lmtest::lrtest(twigs_beta)
+summary(twigs_beta)
+confint(twigs_beta)
+#AIC(twigs_beta) #-125.9611
+#p-value = <.0001 
+
+bark_beta <- betareg(percent_bark_and_leaves~ ground_category, data=ground_non_dup) 
+
+joint_tests(bark_beta)
+lmtest::lrtest(bark_beta)
+summary(bark_beta)
+confint(bark_beta)
+#AIC(bark_beta) #-48.9375
+#p value  0.1759
+
+other_beta <- betareg(percent_other~ ground_category, data=ground_non_dup) 
+
+joint_tests(other_beta)
+lmtest::lrtest(other_beta)
+summary(other_beta)
+confint(other_beta)
+#AIC(other_beta) #-121.2011
+#p-value   0.2656 
+
+
+```
+
+The beta regression tells the same story as the generalized models, but with fewer individuals and poorer AIC values for the most part, so sticking with the generalized model for final results. 
+
+
+*Research Question 1 Conclusion*
+Nest structure is differs significantly in log(nest weight), percent twigs, and percent grasses between on-ground and off-ground nests.  
+
+*Visualization*
+We will use a PCA to to see how on vs. off ground nests differ in variance space. 
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+#filter current dataset to just include the nest variables of interest that were significant in glmer
+ground <- ground %>% 
+  dplyr::select(c("ground_category", "nest_weight", "percent_twigs", "percent_grasses"))
+
+
+#log transform nest mass
+ground$"log(nest mass)" <- log(ground$nest_weight)
+
+#Make pretty column names 
+  ground <- ground %>% 
+    dplyr::rename("Ground Category"= "ground_category") %>% 
+   dplyr::rename("Nest Weight"="nest_weight" ) %>% 
+    dplyr::rename("Proportion Twigs"="percent_twigs") %>% 
+    dplyr::rename("Proportion Grasses"="percent_grasses") %>% 
+   dplyr::rename("log(Nest Mass)"="log(nest mass)")
+
+
+#run PCA using just the nest charactaristics
+nest.pca <- prcomp(ground[3:5], center=TRUE)
+
+#Scree plot
+fviz_eig(nest.pca)
+
+nest.PCi <- data.frame(nest.pca$x, "Ground Category"=ground$"Ground Category")
+
+#plotting the PCA of off-groun on-ground nests charactearistics 
+
+#Add percentages of variance explained by each PC
+percentage.ground <- round(((nest.pca$sdev^2) / (sum(nest.pca$sdev^2)))*100, digits = 1)
+percentage.ground <- paste(colnames(nest.PCi), "(", paste( as.character(percentage.ground), "%", ")", sep="") )
+
+# Extract loadings of the variables
+nest.PCAloadings <- data.frame(Variables = rownames(nest.pca$rotation), nest.pca$rotation)
+
+
+pca.plot <- ggplot(nest.PCi,aes(x=PC1,y=PC2,col=Ground.Category))+
+   geom_point(aes(shape=Ground.Category, color=Ground.Category), size=3)+
+    scale_shape_manual(values = c(17, 16)) + # different shapes for the points
+   scale_color_manual(values = c("grey70", "grey10") )+ 
+  geom_segment(data = nest.PCAloadings, aes(x = 0, y = 0, xend = (PC1*1),
+     yend = (PC2*1)), arrow = arrow(length = unit(1/2, "picas")),
+     color = "black") + #plot the loadings 
+  annotate("text", x = (nest.PCAloadings$PC1*1.25), y = (nest.PCAloadings$PC2*1.25),
+     label = nest.PCAloadings$Variables) +  #label the loadings, adjust the PC#* values to make everything fit
+      geom_hline(yintercept = 0, lty = 2) +
+      geom_vline(xintercept = 0, lty = 2) +
+  xlab(percentage.ground[1]) + ylab(percentage.ground[2]) +
+  stat_ellipse(type = "norm") +
+theme_classic() +
+  theme(legend.title = element_text(size=9, face="bold"),
+        legend.text = element_text(size=9, face="bold"),
+        axis.text.x=element_text(colour="black", size = 11),
+        axis.text.y=element_text(colour="black", size = 11))+
+  labs(shape="Ground Category", color="Ground Category")
+
+
+#confirm percentage of PCA axes with raw pca
+# fviz_pca_biplot(nest.pca,
+#  habillage=plasticity$`Ground Category`,
+#  addEllipses = TRUE,
+#  ellipse.type = "t",
+#  geom.ind = c("point"),
+#  geom.var = c("arrow", "text"), col.ind = "#2E9FDF",
+#  col.var = "black", # Variables color
+#  )
+
+
+```
+
+PCA showing how the on-ground and off-ground nests group based on the variables that were strongly significant (P-value <0.01) in the generalized models: Percent grasses, nest mass (log transformed), and percent twigs using the 40 highest and 40 lowest nests in collection. 
+
+
+Now that we know that on-ground nests tend to weigh less and have fewer twigs and more grasses we can run another PCA of the nest constituents that were significant in our on-ground off-ground analyses (log(nest mass), percent grasses, percent twigs) which used a subset of nests, and use the values from PC1 as our "nest composition" parameter all nests in the 103 deconstructed nest dataset. 
+
+```{r message=FALSE, warning=FALSE, , echo=TRUE, include=FALSE}
+#Remind ourselves what the big dataset of 103 nests looks like
+#str(bignest)
+
+
+#log transform nest mass
+bignest$nest_weight_log <- log(bignest$nest_weight)
+
+#run another PCA using all the deconstructed nests to get the "compostion" value for each nest
+bignest.pca.data <- bignest %>% # filter to just the collumns of nest structure that was showed to differ singificantly 
+  dplyr::select(c("nest_id", "nest_weight_log", "percent_twigs", "percent_grasses"))
+
+#run PCA using just the nest charactaristics of interest
+bignest.pca <- prcomp(bignest.pca.data[2:4], center=TRUE)
+
+#Scree plot
+fviz_eig(bignest.pca)
+
+bignest.PCi <- data.frame(bignest.pca$x, "nest_id"=bignest.pca.data$"nest_id")
+
+#Scree plot
+fviz_eig(nest.pca)
+
+bignest.PCi <- data.frame(bignest.pca$x, "nest_id"=bignest.PCi$"nest_id")
+
+#Merge these PCA values from the female's nest 
+
+bignest <- left_join(bignest, bignest.PCi, by="nest_id")
+
+
+#are there significannt changes in the nest composition parameter if it's and off-ground, vs on-ground nest? 
+nestlmer <- glmer(PC1 ~ nest_height_m + (1|year)+ (1 | female_id), 
+    data = bignest)
+Anova(nestlmer, type=3)  # P.Value 0.0005564, good so using the single measure of nest composition doesn't change the story
+summary(nestlmer)
+confint(nestlmer, level=0.95)
+#AIC(nestlmer) #161.7915
+
+
+#Option to plot the PCA
+
+#Add percentages of variance explained by each PC
+percentage.big <- round(((bignest.pca$sdev^2) / (sum(bignest.pca$sdev^2)))*100, digits = 1)
+percentage.big <- paste(colnames(bignest.PCi), "(", paste( as.character(percentage.big), "%", ")", sep="") )
+
+# Extract loadings of the variables
+bignest.PCAloadings <- data.frame(Variables = rownames(bignest.pca$rotation), bignest.pca$rotation)
+
+bigpca.plot <- ggplot(bignest,  
+                      aes(x=PC1,y=PC2,col=ground_category))+
+   geom_point(aes(shape=ground_category, color=ground_category), size=3, alpha=0.8)+
+   scale_shape_manual(values = c(17, 16)) + # different shapes for the points
+   scale_color_manual(values = c("grey70", "grey10"))+ 
+  geom_segment(data = bignest.PCAloadings, aes(x = 0, y = 0, xend = (PC1),
+     yend = (PC2)), arrow = arrow(length = unit(1/2, "picas")),
+     color = "black") + #plot the loadings 
+    theme_classic() +
+  annotate("text", x = (bignest.PCAloadings$PC1*1.1), y = (bignest.PCAloadings$PC2*1.1),
+     label = bignest.PCAloadings$Variables, size=4.5, face="bold") +  #label the loadings, adjust the PC#* values to makes everything fit
+   xlab(percentage.big[1]) + ylab(percentage.big[2]) +
+  stat_ellipse(type = "norm") +
+    labs(shape="Ground Category", color="Ground Category")+
+  theme(legend.title = element_text(size=12, face="bold"),
+        legend.text = element_text(size=10, face="bold"),
+        axis.text.x=element_text(colour="black", size = 12),
+        axis.text.y=element_text(colour="black", size = 12))
+
+  bigpca.plot
+
+```
+
+
+Taking the significantly different nest constituents and reducing them down to a single parameter will make further tests of plasticity easier, and a significant difference in nest structure can still be observed between on-ground and off-ground nests when using the PC1 measurement. 
+
+
+
+******************************************************************************************************************
+
+Peluc et al. 2008 found that the daily survival probability increased with nest height, so it's possible that building nests above the ground is an adaptive behavior for Santa Catalina Orange-Crowned Warblers. The difference in construction materials and plasticity in the height at which a nest is built suggests there is variation in this trait that may be acted upon by selection. So, to determine if there is evidence of nest building as an adaptive behavior we will ask: 
+
+*Research Question 2: How much difference may be observed in Santa Catalina Orange-crowned Warbler building subsequent nests depending on whether the first nest fledged or failed?*
+
+
+We can now focus on just the females that we have multiple nesting records for to test for evidence of behavioral plasticity by sub-setting our big dataset of 103 nests to just look at females that have built multiple nests within the same season. "Fledge" means that the parent was able to keep the nestlings alive long enough for the young to leave the nest (success), "fail" means that the nest died either due to the parent abandoning the nest or the the eggs/nestlings getting predated. 
+
+To make things more succinct, we will add a new variable to our data with what we'll call the fate classification, where both nests failed (Failed-Failed = FAFA), the first nest failed and the second fledged (Failed-Fledged = FAFL), the first and second nest fledged (Fledged-Fledged = FLFL),and the first nest fledged and second failed (Fledged-Failed=FLFA). 
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+#filter down to just the females with multiple nesting attempts
+
+plasticity <- bignest %>% 
+  drop_na(attempt_number)
+
+#Option to count how many females there are in a given year
+plasticity %>%
+  group_by(year) %>%
+  summarise(n_distinct(female_id))
+  
+#Keep only females with 2 nesting attempts in a given year
+plasticity <- plasticity[plasticity$attempt_number %in% c("1","2"), ] # retain just nesting attempts 1 & 2 since there are only 2 with 3 and 1 with 4 
+
+#make sure each nest attempt is within the same year by grouping birds by year, then female and filtering those with only one observation per group
+
+plasticity<- plasticity %>% 
+  group_by(year, female_id) %>%
+  filter(! n() == 1) %>% 
+  ungroup()
+
+# Make a new collumn specifying Nest attempt and Fledge fail
+
+plasticity$fate_class = ifelse(plasticity$nest_fate == 'Failed', "FA", "FL")
+
+#order the collumns by female and then nest attempt
+plasticity <- plasticity %>% 
+  group_by(female_id) 
+  
+plasticity <- plasticity[
+  with(plasticity,order(female_id, attempt_number)),
+       ]
+
+#make a new dataframe that aggregates the fate classes (fledge or fail) into one collumn
+
+plasticity2<-aggregate(fate_class ~ female_id, paste, collapse="", data=plasticity)
+
+#merge data set by female ID 
+plasticity <- left_join(x=plasticity, y=plasticity2, by='female_id', all.x=TRUE)
+
+#filter out the other fate_class and female_id collumn and then rename the fate 
+plasticity <- plasticity %>% 
+  dplyr::select(-c("fate_class.x", "female_id.1")) %>% 
+  dplyr::rename("fate_class"="fate_class.y")
+
+plasticity$fate_class <-as.factor(plasticity$fate_class)
+
+#count how many there are of each fate class 
+plasticity %>%
+ group_by(fate_class) %>% 
+  summarise(n_distinct(female_id))
+
+
+
+```
+
+
+We can first determine if there is an absolute change in nest height and mass depending on the fate classification (FAFA= Failed-Failed; FAFL= Failed- Fledged; FLFL= Fledged-Fledged; FAFL= Fledged-Failed). 
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+#abs difference in nest height summary statistics
+#calculate the difference of nest heights by female ID so the nests of same female will be paired
+difference <- as_tibble(aggregate(nest_height_m~ female_id, diff, data = plasticity)) %>% 
+  unnest(nest_height_m) %>% 
+  as.data.frame(difference)
+
+mass_dif<- as_tibble(aggregate(nest_weight~ female_id, diff, data = plasticity)) %>% 
+  unnest(nest_weight) 
+
+difference <- cbind(difference, mass_dif[,2])
+
+#remove the duplicate IDs in the big nest file so it'll merge
+mergenest <- plasticity[!duplicated(plasticity$female_id),]
+
+
+#join with plasticity dataset to get the fate class for each female and the absolute difference in the nest hight of their nest 1 and nest 2
+difference$fate_class <- merge(x=difference, y=mergenest, by="female_id", all.x=T)[,c("fate_class")]
+
+difference$fate_class <- as.factor(difference$fate_class)
+
+difference <- as.tibble(difference)
+
+#find absolute value of the differences of height 
+difference$abs_nest_height_meters <-  abs(difference$nest_height_m)
+
+
+
+#find absolute value of the differences of mass
+difference$abs_nest_weight <-  abs(difference$nest_weight)
+
+
+
+#mean  
+difference %>%
+  group_by(fate_class) %>%
+  summarise(abs_nest_height_meters = mean(abs_nest_height_meters))
+
+#total mean
+difference %>%
+  summarise(abs_nest_height_meters = mean(abs_nest_height_meters))
+
+#Standard deviation
+difference %>%
+  group_by(fate_class) %>%
+  summarise(abs_nest_height_meters = sd(abs_nest_height_meters))
+
+#Standard error
+difference %>%
+  group_by(fate_class) %>%
+  summarise(abs_nest_height_meters = std.error(abs_nest_height_meters))
+
+
+
+#Same thing but with weight
+#mean  
+difference %>%
+  group_by(fate_class) %>%
+  summarise(abs_nest_weight = mean(abs_nest_weight))
+
+
+#total mean
+difference %>%
+  summarise(abs_nest_weight = mean(abs_nest_weight))
+
+#Standard deviation
+difference %>%
+  group_by(fate_class) %>%
+  summarise(abs_nest_weight = sd(abs_nest_weight))
+
+#Standard error
+difference %>%
+  group_by(fate_class) %>%
+  summarise(abs_nest_weight = std.error(abs_nest_weight))
+
+
+
+#abs difference in height between nests by fate class
+# Option to do a t.test if only doing FAFA vs. FAFL comparison
+#FAFA<- difference %>% 
+#  filter(! fate_class =="FLFL")
+#t.test(nest_height_meters~ fate_class, data=FAFA)
+
+
+#add the absolute difference in nest heights and weights
+difference <- difference %>% 
+  dplyr::select(c("female_id", "abs_nest_height_meters", "abs_nest_weight"))
+
+plasticity <- merge(plasticity, difference, by="female_id") 
+
+#Boxplot illustrating the absolute difference in nest height #filter to just the FAFA, FAFL since that is the most interesting comparison between those who move and succeed vs. those that move and fail. Plus our sample size is super limited 
+plasticity <- plasticity %>% 
+  filter(! fate_class == "FLFA") %>% 
+filter(! fate_class == "FLFL")
+
+
+#use linear model to get confidence intervals and add year as a random effect 
+diflm <- glmer(abs_nest_height_meters~ fate_class + (1|year), data=plasticity)
+Anova(diflm, type=3)
+summary(diflm)
+emmeans(diflm, "fate_class")
+
+#use linear model to get confidence intervals and add year as a random effect 
+diflm_mass <- glmer(abs_nest_weight~ fate_class + (1|year), data=plasticity)
+Anova(diflm_mass, type=3)
+summary(diflm_mass)
+emmeans(diflm_mass, "fate_class")
+
+
+
+
+boxplot <- ggplot(plasticity, color= fate_class,aes(x=attempt_number, y=abs_nest_height_meters, group=fate_class, fill=fate_class)) +
+    geom_boxplot(lwd=1, colors=c( "black", "#808080"))+
+              scale_fill_manual(values=c("#808080", "black"), name="Fate Class")+
+     theme_few()+
+  theme(legend.title = element_text(color="black",face="bold", size=12),
+        legend.text = element_text(color="black",face="bold", size=10),
+    axis.text.x = element_text(color="black",face="bold", size=10), 
+        axis.text.y = element_text( color="black",face="bold", size=10),
+        axis.line = element_line(colour = "black"),
+        axis.title=element_text(colour="black", size = 12,face="bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank())+
+  scale_x_discrete(expand = expand_scale(mult = c(.1, .1)))+
+  scale_y_continuous(limits = c(0, 3.2))+
+  theme(panel.border = element_blank(), axis.line = element_line(colour = "black"),plot.title = element_text(hjust = 0.5))+
+  labs(x="Nest Attempt", y = "|Δ| in Nest Height (m)")+
+      geom_text(x= c(1.725), y = 3.1, label = "1.141 ± 0.415", family="Tahoma")+
+       geom_text(x= c(1.275), y = 2.1, label = "0.654 ± 0.207", family="Tahoma")
+
+
+boxplot
+
+
+```
+
+We see no "significant" difference between the all fate classifications in the overall change in nest height. However, the mean absolute change of height was greatest for females whose first nest Failed and the second one Fledged.The females that had the least change in height were those who had two failed nests. The difference between change in nest height is significant if we just focus on just the females who failed initially.     
+
+We can also check to see how the "nest composition" changes between the first and second nest 
+
+```{r}
+
+#Do females build fundamentally different nests between Nest attempt 1 and 2?
+
+#check if PC1 is normal
+#ggplot(plasticity, aes(x=PC1)) + 
+ # geom_histogram(binwidth=.3)
+#fairly normal distributed
+
+#Test to see if nest composition differes between the first and second nest of the same female 
+attemptlmer <- lmer(PC1 ~ attempt_number + (1|female_id) + (1|year), data = plasticity, na.action = "na.fail")
+Anova(attemptlmer, type=3)
+summary(attemptlmer)
+#confint(attemptlmer, level=0.95)
+#emmeans(attemptlmer,pairwise ~ attempt_number +female_id)
+#there is significant diffrence between females if you treat them a a fixed effect, but between attempt number there is no significant differnence betwwen most females except for 
+#ABK/GY -- FAFL
+#RA/BKBK --FAFA
+#WA/OO --FAFA
+#YG/P-- FAFA
+#So changing your nest a lot might be a bad thing?
+
+
+#does nest composition affect survivial?
+PC1.fate.lmer <- lmer(PC1 ~ fate_class+(1|year) +(1|female_id),data = plasticity)
+Anova(PC1.fate.lmer, type=3)
+summary(PC1.fate.lmer)
+#PC1 of the nest composition has a p-value of 0.17, so it could be at least marginally important between the groups
+#but within females it doesn't seem to be an improtant factor
+
+```
+
+
+*Research Question 2 Conclusion*
+
+Females that have a successful second nest tend to move their nests more than the females that fail both times. This is an interesting trend that supports our hypothesis that this plasticity of behavior is driven by natural selection since the more plastic females tend to fledge (aka have higher fitness) than less plastic females. Our inference is fairly limited due to the number of re-nesting females in our dataset, but is comparable to other published studies (Patrick et al. 2017), for example. This is novel because as a population we care showing that being more plastic may correlate to an increase in overall fitness.  
+
+
+******************************************************************************************************************
+
+
+*Research Question 3: Are individual Santa Catalina Orange-crowned Warbler's behaviorally plastic?* 
+
+We will answer this with a reaction norm plots to see if the same female will plastically change the height at which they build their second nest following failure and if individual females will build structurally different nests. 
+
+In total we have, 13 Fail-Fail females, 9 Fail_Fledge females, 4 Fledge-Fledge females, and 1 Fledge-Fail females. We will focus on just those female that experience initial nest failure within the same season for tests of plasticity.  
+
+```{r}
+
+#re-order so that the dashed dark lines are on top
+plasticity$fate_class <- factor(plasticity$fate_class, levels = c("FAFA", "FAFL", "FLFA", "FLFL"))
+
+#Reaction norm plot showing change in nest height 
+plastic.plot <- ggplot(plasticity, aes(x=attempt_number, y=nest_height_m, group=female_id, color= fate_class, alpha=fate_class)) +
+ geom_line(aes(color= fate_class, linetype=fate_class), size=2,position=position_jitter(w=0, h=0.05))+
+   scale_color_manual(values=c( "#808080", "black"), name="Fate Class")+
+  scale_linetype_manual(values=c("solid", "dashed"), name="Fate Class")+
+  scale_alpha_manual(values=c(0.7,1), guide=FALSE) +
+  labs(x="Nest Attempt", y = "Nest Height (m)")+
+  scale_x_discrete(expand = expansion(mult = c(.05, .05))) +
+  scale_y_continuous(expand = c(.05, .05)) +
+  theme_few() +
+  theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        text=element_text(family="Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 11, face="bold"),
+        axis.text.y=element_text(colour="black", size = 11, face="bold"),
+        axis.line = element_line(colour = "black"),
+        legend.title = element_text( size=9, face="bold"),
+        legend.text = element_text(size=9, face="bold"))
+
+#Figure out sample sizes with which
+#for example
+#length(which(plasticity$fate_class =="FLFA")) # devide this by two since there are two records per female
+
+
+# #possible to color the lines based on how significantly different they are in nest composition? 
+# p.values.F <- coef(summary(attemptlmer))[,5] #extract p-values from the model
+# p.values.F <- as.data.frame(p.values.F) #create date frame
+# p.values.F <- tibble::rownames_to_column(p.values.F, "female_id")
+# 
+# #clean file so it'll merge 
+# p.values.F$female_id <- str_remove(p.values.F$female_id, "female_id") #get rid of the "female id"
+# p.values.F <-p.values.F[-(1:2),] #remove the first two rows
+# 
+# #Merge the p-values to dataset 
+# 
+# plasticity <- left_join(plasticity, p.values.F, by="female_id", na.action=na.omit)
+
+
+#Note there are 16 on ground nests and 28 off ground nests. The pattern remains the same as the 
+#previous PCA with the 40 highest off-ground nests.
+
+
+
+plastic.plot2 <- ggplot(plasticity, aes(x=nest_height_m, y=nest_weight, group=female_id))+
+    geom_line(size=1, alpha=.7)+
+  labs(x="Nest Height (m)", y = "Nest Weight (g)")+
+  scale_x_continuous() +
+  scale_y_continuous(expand = c(.05, .05)) +
+  theme_few()+
+  theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        text=element_text(family="Tahoma"),
+        plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 11, face="bold"),
+        axis.text.y=element_text(colour="black", size = 11, face="bold"),
+        axis.line = element_line(colour = "black"),
+        legend.title = element_text( size=9, face="bold"),
+        legend.text = element_text(size=9, face="bold"))
+
+plastic.plot2 
+
+
+```
+
+
+Each line represents a different female, and shows the height as well as the nest composition (PC1) between their first and second nest. We can see some interaction where females are changing their behavior between nests, particularly in terms of the height at which the nest is built. 
+
+*Research Question 3 Conclusion *
+Yes, female Orange-crowned Warblers exhibit a lot of individual variation in the height at which they will build their nests. However, its difficult to discern if they are truly making an "adaptive" decision along the lines of Peluc et al.'s finding which suggested that off ground nests are more likely to succeed since there isn't a clear pattern of females moving up or down after a failed nest. This is illustrated in the reaction norm plots since the same female (represented as lines on the graph) will build different nests (measured by PC1) at different heights within the same year after the original nest failed. This could indicate there is some sort of trade-off to building an off-ground nest that we haven't accounted for in this study, but should be looked into with more field research.   
+
+
+
+************************************************************************************************************************
+
+#Lets put it all together
+
+So females that move the most tend to be the ones that are successful after initial nest failure. Which begs the question, *does the absolute change in nest height and composition affect the probability of success after initial failure?*. Because we have 22 females that re-nested following nest failure (13 Fail-Fail females and 9 Fail-Fledge females), we can determine if there is a predictable response following initial nest failure that will increase the likelihood of a successful second nest. 
+
+Because we are interested in how plastic the behavior is, not necessarily the direction in terms of composition or height, we will use the absolute difference in nest height and composition of the nests to see how it affects the predictability of nest success following initial failure. 
+
+
+We will use a logistical regression to see if different factors of nest building plasticity have an effect on the success or failure of a subsequent nest following failure. 
+
+```{r message=FALSE, warning=FALSE}
+
+#first got to assign bianary values to success or failure for a logistic regression
+plasticity$nest_fate <- as.character(plasticity$nest_fate)
+
+#I know there is a tidy-er way to do this, but splitting to just second nest attempt works and can merge later 
+
+plasticity.second <- plasticity %>% 
+  filter(attempt_number=="2")
+plasticity.second$binary.second<-ifelse(plasticity.second$nest_fate == "Failed", "0", "1")
+
+plasticity.second <- plasticity.second %>% 
+  dplyr::select(c("female_id", "binary.second"))
+      
+#merge datasets back together                    
+plasticity <- merge(plasticity, plasticity.second)
+
+#make sure female id and bianary success or failure are factors 
+plasticity$female_id <- as.factor(plasticity$female_id)
+plasticity$binary.second <- as.factor(plasticity$binary.second)
+
+
+#abs difference in nest composition
+#calculate the difference of nest composition by female ID so the nests of same female will be paired
+difference_pc1 <- as_tibble(aggregate(PC1~ female_id, diff, data = plasticity)) %>% 
+  unnest(PC1) %>% 
+  as.data.frame(difference_pc1)
+
+difference_pc1 <- as.tibble(difference_pc1)
+
+#find absolute value of the differences of nest composition
+difference_pc1$abs_PC1 <-  abs(difference_pc1$PC1)
+
+difference_pc1 <- difference_pc1 %>% 
+  dplyr::select(c("female_id", "abs_PC1"))
+
+plasticity <- left_join(plasticity, difference_pc1, by="female_id")
+
+
+#other option to use the absplute differnece in nest mass since that had the greatest effect between off ground and on ground nests 
+
+
+#abs difference in nest composition
+#calculate the difference of nest composition by female ID so the nests of same female will be paired
+difference_weight <- as_tibble(aggregate(nest_weight_log~ female_id, diff, data = plasticity)) %>% 
+  unnest(nest_weight_log) %>% 
+  as.data.frame(difference_weight)
+
+difference_weight <- as.tibble(difference_weight)
+
+#find absolute value of the differences of nest weight
+difference_weight$abs_weight_log <-  abs(difference_weight$nest_weight_log)
+
+difference_weight <- difference_weight %>% 
+  dplyr::select(c("female_id", "abs_weight_log"))
+
+plasticity <- left_join(plasticity, difference_weight, by="female_id")
+
+
+
+
+
+#Test to see if plasticity in nest height correlates to plasticity in nest composition (log nest weight) 
+#First just use one observation for each female 
+plasticity_sing <- plasticity[!duplicated(plasticity$female_id), ]
+
+#now run the model 
+plasticity.lmer <- glmer(abs_weight_log ~ abs_nest_height_meters+ (1|year) + (1|female_id), data = plasticity)
+Anova(plasticity.lmer, type=3) #P value is 1 for PC1 for attempt number, but for mass it's .2
+summary(plasticity.lmer)
+#emmeans(plasticity.lmerr,pairwise ~ attempt_number + female_id)
+r.squaredGLMM(plasticity.lmer, n = NULL)
+#between females there is significant variation, but:  
+
+#Test to see if absolute change in nest weight differs between the first and second nest of each female 
+weight.attempt.lmer <- glmer(abs_weight_log ~ (1|year) +attempt_number+female_id,data = plasticity)
+Anova(weight.attempt.lmer, type=3) #P value = 0.004002 for attempt number
+summary(weight.attempt.lmer)
+#emmeans(weight.attempt.lmer)
+
+#emmeans(weight.attempt.lmer,pairwise ~ attempt_number + female_id)
+
+weight.attempt.lmer <- glmer(abs_weight_log ~ fate_class +(1|year) +(1|female_id),data = plasticity)
+Anova(weight.attempt.lmer, type=3) # Between fate classes there are no significant differences P-value 0.8161 so absolute change in nest weight doesn't seem to have much effect on the nest fate
+summary(weight.attempt.lmer)
+
+
+
+nestlogit <- glmer(binary.second ~ abs_nest_height_meters + abs_weight_log + abs_nest_height_meters:abs_weight_log+(1|female_id) + (1|year),
+                   data=plasticity,family="binomial"(link="logit"), na.action = "na.fail")  
+
+
+#cor.test(plasticity$abs_weight_log, plasticity$nest_height_m, method = "pearson")
+
+# second option for logistic regression to see if the absolute change in nest height and nest wieght (since it was the most significant) has an effect
+#nestlogit <- glmer(binary.second ~ abs_nest_height_meters + abs_weight_log + abs_nest_height_meters:abs_weight_log+(1|female_id) + (1|year),
+ #                  data=plasticity,family="binomial"(link="logit"), na.action = "na.fail")
+
+
+
+summary(nestlogit) #absolute change in nest height strongly significant for nest success as well as change in nest weight or nest composition (which includes weight) and the interaction terms. 
+  #Seems like includeing PC1 tells amore well rounded story since that includes all the variables that differed between on ground and off ground nests. But According to C.G. the nest size is more common in the liturature and may be easier for folks to recognize
+
+#make pretty plot by predicting probabilities for additional change in nest heights along the range in our dataset so the curve is smooth 
+test.df <- ggpredict(nestlogit, terms="abs_nest_height_meters [0:3 by=0.001]", ci.lvl = 0.95)
+
+#Plot out the regression by adding curve based on predicted probabilites, add points of the raw data for reference
+prob.plot <- ggplot(test.df, aes(x=x, y=predicted))+ 
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high), fill="grey70", alpha=.4)+
+   geom_line(lwd=1)+
+  labs(x = "|Δ| in Nest Height", y = "Probability of\nNest Success")+
+  theme_few() +
+  theme(text=element_text(family="Tahoma"),
+        plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 11),
+        axis.text.y=element_text(colour="black", size = 11))+
+  geom_point(data=plasticity, aes(x=abs_nest_height_meters, y=as.numeric(binary.second)-1))
+  
+
+```
+The absolute change in nest composition (measured as PC1) doesn't have a significant effect on the likelihood of nest success, but absolute change in nest height has a very strong effect. Because nest composition has been shown to have an effect on survival in other species, and is shown to significantly differ relative to nest height, we will retain PC1 and the interaction term in our model to account for any potential effects due to nest composition.  
+
+We see that the likelihood of nest success sharply increases as the change in nest height increases. Our limits of sample size are likely skewing this curve to look much sharper than what occurs in nature, but is suggestive that the more plastic individuals are more likely to fledge young which we can use as a proxy for fitness. 
+
+We can now visualize all of our plasticity results below: 
+
+```{r message=FALSE, warning=FALSE}
+
+#final figure 3
+
+plot_grid(plastic.plot, plastic.plot2, ncol=2, scale = 0.88, labels="AUTO")
+
+
+```
+
+```{r message=FALSE, warning=FALSE}
+#final figure 4
+
+#prepare the data 
+#need to split the attempt numbers so that the height of nest 1 can be plotted against hight of nest 2
+#there is probably a nicer way to do this but #itworks
+
+nest_1 <- plasticity %>% 
+  dplyr::select("female_id", "nest_height_m", "attempt_number", "fate_class") %>% 
+  filter(attempt_number=="1") %>% 
+  dplyr::rename("nest_height_m_1"="nest_height_m")
+  
+nest_2 <- plasticity %>% 
+  dplyr::select("female_id", "nest_height_m", "attempt_number") %>% 
+  filter(attempt_number=="2") %>% 
+  dplyr::rename("nest_height_m_2"="nest_height_m")
+
+nest_attempt <- merge(nest_1, nest_2, by="female_id")
+#make scatter plot to line up with predictions plot 
+
+indiv_scatter <- ggplot(nest_attempt, aes(x=nest_height_m_1, y=nest_height_m_2)) +
+  #geom_smooth(method='lm', formula= y~x, se = T, linetype="longdash", color= "black", fill = "grey80")+
+  geom_point(aes(shape=fate_class, color=fate_class), name="Fate Class",stroke = 2)+
+scale_shape_manual(values=c(19, 4), name="Fate Class")+
+  scale_color_manual(values=c("#808080","black"),name="Fate Class")+
+     labs(y="2nd Nest Height", x="1st Nest Height")+
+  theme_few()+
+  theme(legend.title = element_text(color="black",face="bold", size=12),
+        legend.text = element_text(color="black",face="bold", size=10),
+    axis.text.x = element_text(color="black",face="bold", size=10), 
+        axis.text.y = element_text( color="black",face="bold", size=10),
+        axis.line = element_line(colour = "black"),
+        axis.title=element_text(colour="black", size = 12,face="bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank())
+
+
+plot_grid(indiv_scatter,boxplot, prob.plot, ncol=1,scale = 0.88, labels="AUTO")
+
+```
+
+*Overall conclusion*
+
+This study provides some of the first empirical evidence of a wild population plastically modifying a stereotypical behavior potentially as a response to variable predation pressures. Orange-crowned Warbler females significantly changed the height at which they build their nests which corresponds to a significant shift in the construction of nests at differing heights. These results are in line with previous studies demonstrating adaptive behavioral plasticity in nest site selection and utilization of nesting materials (Peluc et al. 2008, Montage et al. 2008).
+
+
+
