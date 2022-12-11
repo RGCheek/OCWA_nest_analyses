@@ -3,7 +3,9 @@ built on the ground (nest height = 0 meters), and 33 of the highest "off-ground"
 
 Further, nests were selected if they were built by the same female withing a breeding season so that analyses regarding behavioral plasticity could be conducted.
 
-Github repository includes the nesting data used in analyses and an R markdown file of the annotated code.  
+Github repository includes the nesting data used in analyses and an R markdown file of the annotated code.The code and raw data are the property of the authors and protected under a Creative Commons license.
+
+These findings are published in Animal Behaviour: https://doi.org/10.1016/j.anbehav.2022.08.017
 
 For more information on the study system, See:
 Sofaer HR, Sillett TS, Langin KM, Morrison SA,  Cameron K. Ghalambor. Partitioning the sources of demographic variation reveals density-dependent nest predation in an island bird population. Ecology and Evolution. 2014; 4(13): 2738–2748. doi: 10.1002/ece3.1127 
