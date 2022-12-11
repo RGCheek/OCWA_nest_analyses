@@ -3,7 +3,8 @@ built on the ground (nest height = 0 meters), and 33 of the highest "off-ground"
 
 Further, nests were selected if they were built by the same female withing a breeding season so that analyses regarding behavioral plasticity could be conducted.
 
-Github repository includes the nesting data used in analyses and an R markdown file of the annotated code.The code and raw data are the property of the authors and protected under a Creative Commons license.
+Github repository includes the nesting data used in analyses and an R markdown file of the annotated code.
+The files included in this repository are liscenced under terms of the Creative Commons Attribution-NonCommercial License, which permits use, distribution and reproduction in any medium, provided the original work is properly cited and is not used for commercial purposes.
 
 These findings are published in Animal Behaviour: https://doi.org/10.1016/j.anbehav.2022.08.017
 
